@@ -43,7 +43,7 @@ done
 [ -z $OUT ] && OUT=./out
 
 # list all packages needed for halium's initrd here
-[ -z $INCHROOTPKGS ] && INCHROOTPKGS="initramfs-tools dctrl-tools e2fsprogs libc6-dev zlib1g-dev libssl-dev busybox-static"
+[ -z $INCHROOTPKGS ] && INCHROOTPKGS="initramfs-tools dctrl-tools e2fsprogs libc6-dev zlib1g-dev libssl-dev busybox-static ostree"
 
 BOOTSTRAP_BIN="qemu-debootstrap --arch $ARCH --variant=minbase"
 
@@ -113,5 +113,39 @@ do_chroot $ROOT "update-initramfs -tc -ktouch-$VER -v"
 
 mkdir $OUT >/dev/null 2>&1 || true
 cp $ROOT/boot/initrd.img-touch-$VER $OUT
+
+# extract and create the external utils image
+cat <<SHELL > ${ROOT}/binstub
+#!/bin/sh
+
+BASEDIR=\$(dirname "\$0")
+BASENAME=\$(basename "\$0")
+
+export LD_LIBRARY_PATH=\$BASEDIR/lib/$DEB_HOST_MULTIARCH:\$BASEDIR/usr/lib/$DEB_HOST_MULTIARCH
+export PATH=\$BASEDIR/usr/bin:\$PATH
+
+\$BASENAME \$@
+SHELL
+
+cat <<SHELL > ${ROOT}/extract-utils
+#!/bin/bash
+. /usr/share/initramfs-tools/hook-functions
+
+DESTDIR='/opt/utils'
+mkdir -p \$DESTDIR
+
+copy_exec /usr/bin/ostree
+cp /binstub \$DESTDIR/ostree
+SHELL
+
+chmod +x ${ROOT}/binstub
+chmod +x ${ROOT}/extract-utils
+
+do_chroot $ROOT /extract-utils
+
+dd if=/dev/zero of=$OUT/initrd-utils.img seek=500K bs=4096 count=0
+mkfs.ext4 -d $ROOT/opt/utils $OUT/initrd-utils.img
+resize2fs -M $OUT/initrd-utils.img
+
 cd $OUT
 cd - >/dev/null 2>&1
