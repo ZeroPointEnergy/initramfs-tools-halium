@@ -218,27 +218,37 @@ resize_userdata_if_needed() {
 	fi
 }
 
-identify_file_layout() {
-	# Determine if we have a Halium rootfs.img & system.img
+prepare_ostree() {
+	repo=/tmpmnt/ostree/repo
+	imagefile=/tmpmnt/halium-rootfs
+	file_layout="halium"
 
-	# $file_layout = "halium" means there is a separate rootfs.img and system.img on userdata
-	#
-	# = "partition" means the rootfs is located on the device's system partition
-	# and will contain /var/lib/lxc/android/system.img
-	#
-	# = "subdir" means the rootfs is located in a folder on the device's userdata partition
-	# and will contain /var/lib/lxc/android/system.img
-
-	if [ -e /tmpmnt/rootfs.img ]; then
-		imagefile=/tmpmnt/rootfs.img
-		file_layout="halium"
-	elif [ -d /tmpmnt/halium-rootfs ]; then
-		imagefile=/tmpmnt/halium-rootfs
-		file_layout="subdir"
+	# mount utils image with the ostree binary
+	if [ -f /tmpmnt/initrd-utils.img ]; then
+		tell_kmsg 'mounting /tmpmnt/initrd-utils.img to /opt/utils'
+		mkdir -p /opt/utils
+		mount -o ro /tmpmnt/initrd-utils.img /opt/utils
 	else
-		file_layout="partition"
+		halium_panic 'initdr-utils.img is missing'
 	fi
 
+	# Create the ostree repo if not already present
+	if [ ! -d $repo ] || [ -f /tmpmnt/.telnet-install ]; then
+		# Start telnet for initial installation
+		/scripts/panic/telnet 'Initial device installation'
+	fi
+
+	# TODO: write tool to select ref or install
+	# additional os or updates
+	ostree_ref='ubuntu-touch/xenial-armhf/daily'
+
+	# checkout branch
+	rm -rf $imagefile
+	tell_kmsg "ostree: checking out ${ostree_ref} to ${imagefile}"
+	/opt/utils/ostree checkout --repo=$repo $ostree_ref $imagefile
+
+	# unmount utils
+	umount /opt/utils
 }
 
 process_bind_mounts() {
@@ -419,7 +429,7 @@ mountroot() {
 	fi
 
 	identify_boot_mode
-	identify_file_layout
+	prepare_ostree
 
 	# If both $imagefile and $syspart are set, something is wrong. The strange
 	# output from this could be a clue in that situation.
@@ -437,23 +447,7 @@ mountroot() {
 	mkdir -p /android-system
 
 	tell_kmsg "mounting system rootfs at /halium-system"
-	if [ -n "$syspart" ]; then
-		mount -o rw $syspart /halium-system
-	elif [ -f "$imagefile" ]; then
-		mount -o loop,rw $imagefile /halium-system
-		# If either (android) /data/.writable_image or (on rootfs)
-		# /.writable_image exist, mount the rootfs as rw
-		if [ -e /tmpmnt/.writable_image ] || [ -e $/halium-system/.writable_image ]; then
-			tell_kmsg "mounting $imagefile (image developer mode)"
-			mountroot_status="$?"
-		else
-			tell_kmsg "mounting $imagefile (user mode)"
-			mount -o remount,ro /halium-system
-			mountroot_status="$?"
-		fi
-	elif [ -d "$imagefile" ]; then
-		mount -o bind /tmpmnt/halium-rootfs /halium-system
-	fi
+	mount -o bind /tmpmnt/halium-rootfs /halium-system
 
 	# Mount the android system partition to a temporary location
 	mkdir -p /android-system
